@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CAT'S SPACE INVADER</title>
+<style>
+  :root { color-scheme: dark; --cyan:#75f7ff; --green:#8cff9b; --pink:#ff70c8; }
+  * { box-sizing:border-box }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#050812; color:#eafaff;
+         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow:hidden }
+  .cabinet { width:min(94vw,900px); padding:18px; border:2px solid #24445b; border-radius:16px;
+             background:linear-gradient(145deg,#101b2c,#080d18); box-shadow:0 0 45px #00d9ff18,inset 0 0 30px #000 }
+  header { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap }
+  .brand { color:#fff; letter-spacing:.12em; font-weight:900; padding:7px 12px; border:2px solid #d94b42; background:linear-gradient(90deg,#c83c35 0 12px,#f4eee0 12px 100%); color:#17202a; text-shadow:0 1px #fff; box-shadow:3px 3px 0 #702b36 }
+  .hint { color:#93a9bd; font-size:12px }
+  .screen { position:relative; width:100%; aspect-ratio:4/3; background:#02050b; border:2px solid #29445b;
+            overflow:hidden; box-shadow:inset 0 0 35px #000 }
+  canvas { display:block; width:100%; height:100%; image-rendering:pixelated }
+  .overlay { position:absolute; inset:0; display:grid; place-items:center; padding:20px;
+             background:linear-gradient(#030914d9,#030914e8); text-align:center }
+  .panel { width:min(100%,460px); padding:28px 22px; border:1px solid #31516a; background:#07101deF;
+           box-shadow:0 0 30px #00d9ff20 }
+  h1 { margin:0 0 8px; color:var(--green); font-size:clamp(25px,5vw,42px); text-shadow:0 0 16px #8cff9b66 }
+  .subtitle { color:#a5bdd0; font-size:12px; letter-spacing:.18em; margin-bottom:24px }
+  .menu { display:grid; gap:10px; margin:18px auto; max-width:260px }
+  button { border:1px solid #39718a; background:#10283a; color:#eaffff; padding:12px 18px;
+           font:700 14px ui-monospace,monospace; letter-spacing:.12em; cursor:pointer }
+  button:hover,button:focus-visible { outline:none; border-color:var(--cyan); color:var(--cyan); background:#17394e;
+                                      box-shadow:0 0 15px #00d9ff30 }
+  .small { color:#91a7bb; font-size:11px; line-height:1.7 }
+  .hud { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 2px 0;
+         color:var(--cyan); font-size:12px; letter-spacing:.08em }
+  .hud span:nth-child(2) { color:var(--green) }
+  .touch { display:none; justify-content:center; gap:14px; padding-top:12px }
+  .touch button { min-width:72px; font-size:18px; padding:10px }
+  @media (pointer:coarse) { .touch { display:flex } .hint { display:none } }
+</style>
+</head>
+<body>
+<main class="cabinet">
+  <header><div class="brand">CAT'S SPACE INVADER</div><div class="hint">ARROWS / A-D: MOVE · SPACE: FIRE · P: PAUSE</div></header>
+  <section class="screen">
+    <canvas id="game" width="800" height="600" aria-label="Space Invaders game"></canvas>
+    <div class="overlay" id="overlay">
+      <div class="panel">
+        <h1>CAT'S SPACE INVADER</h1>
+        <div class="subtitle">FAMICOM-STYLE ARCADE SYSTEM</div>
+        <div class="menu">
+          <button id="start">▶ START GAME</button>
+          <button id="how">HOW TO PLAY</button>
+          <button id="about">ABOUT</button>
+          <button id="audioToggle">AUDIO: ON</button>
+        </div>
+        <div class="small" id="message">DEFEND EARTH. CLEAR THE INVADERS.<br>PRESS START TO DEPLOY.</div>
+      </div>
+    </div>
+  </section>
+  <div class="hud"><span id="score">SCORE 00000</span><span id="status">READY</span><span id="lives">LIVES ♥♥♥</span></div>
+  <div class="touch">
+    <button id="left">◀</button><button id="fire">FIRE</button><button id="right">▶</button>
+  </div>
+</main>
+<script>
+(() => {
+  const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+  const overlay = document.getElementById('overlay'), message = document.getElementById('message');
+  const scoreEl = document.getElementById('score'), livesEl = document.getElementById('lives'), statusEl = document.getElementById('status');
+  const W=800,H=600, keys={left:false,right:false,fire:false};
+  // Famicom-inspired sound engine: generated tones/noise only; no external audio files.
+  let audioOn=true, audioCtx=null, master=null;
+  function initAudio() {
+    if (!audioOn) return;
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if (!AC) { audioOn=false; syncAudioButton(); return; }
+    if (!audioCtx) {
+      audioCtx=new AC();
+      master=audioCtx.createGain(); master.gain.value=0.16; master.connect(audioCtx.destination);
+    }
+    if (audioCtx.state==='suspended') audioCtx.resume();
+  }
+  function tone(freq,duration=.09,wave='square',volume=.22,slide=0) {
+    if (!audioOn) return;
+    initAudio(); if (!audioCtx) return;
+    const t=audioCtx.currentTime, osc=audioCtx.createOscillator(), gain=audioCtx.createGain();
+    osc.type=wave; osc.frequency.setValueAtTime(Math.max(35,freq),t);
+    if (slide) osc.frequency.exponentialRampToValueAtTime(Math.max(35,freq+slide),t+duration);
+    gain.gain.setValueAtTime(.0001,t); gain.gain.exponentialRampToValueAtTime(volume,t+.008);
+    gain.gain.exponentialRampToValueAtTime(.0001,t+duration);
+    osc.connect(gain); gain.connect(master); osc.start(t); osc.stop(t+duration+.02);
+  }
+  function noise(duration=.12,volume=.12) {
+    if (!audioOn) return;
+    initAudio(); if (!audioCtx) return;
+    const n=Math.max(1,Math.floor(audioCtx.sampleRate*duration)), buffer=audioCtx.createBuffer(1,n,audioCtx.sampleRate);
+    const data=buffer.getChannelData(0); for(let i=0;i<n;i++) data[i]=(Math.random()*2-1)*(1-i/n);
+    const src=audioCtx.createBufferSource(), gain=audioCtx.createGain();
+    gain.gain.value=volume; src.buffer=buffer; src.connect(gain); gain.connect(master); src.start();
+  }
+  const sfx={
+    start(){tone(392,.08);setTimeout(()=>tone(523,.1),90);setTimeout(()=>tone(659,.16),190)},
+    shoot(){tone(880,.055,'square',.12,-420)},
+    hit(){tone(180,.12,'triangle',.2,-100)},
+    enemy(){tone(260,.07,'square',.13,-120)},
+    player(){noise(.2,.2);tone(110,.24,'sawtooth',.16,-65)},
+    wave(){[523,659,784].forEach((f,i)=>setTimeout(()=>tone(f,.12,'square',.13),i*110))}
+  };
+  function syncAudioButton(){const b=document.getElementById('audioToggle');if(b)b.textContent='AUDIO: '+(audioOn?'ON':'OFF')}
+  function toggleAudio(){audioOn=!audioOn;if(audioOn)initAudio();syncAudioButton();if(audioOn)sfx.start()}
+  let state='menu', score=0, lives=3, player, bullets=[], enemyBullets=[], invaders=[], shields=[], particles=[];
+  let enemyDir=1, enemyStep=0, fireTimer=0, last=0, elapsed=0, wave=1;
+  const colors=['#8cff9b','#75f7ff','#ffcf70'];
+  function reset() {
+    score=0; lives=3; wave=1; newWave(); player={x:W/2,y:545,w:42,h:24,cool:0,hit:0};
+    bullets=[]; enemyBullets=[]; particles=[]; updateHud();
+  }
+  function newWave() {
+    invaders=[];
+    for(let r=0;r<5;r++) for(let c=0;c<11;c++)
+      invaders.push({x:105+c*54,y:90+r*43,w:30,h:22,row:r,col:c,alive:true});
+    shields=[];
+    for(let b=0;b<4;b++) {
+      const x=105+b*195;
+      for(let row=0;row<3;row++) for(let col=0;col<7;col++)
+        shields.push({x:x+col*7,y:455+row*7,w:7,h:7,alive: !(row===2&&(col===0||col===6))});
+    }
+    enemyDir=1; enemyStep=0; fireTimer=1.2;
+  }
+  function updateHud() {
+    scoreEl.textContent='SCORE '+String(score).padStart(5,'0');
+    livesEl.textContent='LIVES '+'♥'.repeat(lives);
+    statusEl.textContent='WAVE '+wave;
+  }
+  function showMenu(title,sub,buttons) {
+    overlay.style.display='grid';
+    overlay.querySelector('h1').textContent=title;
+    overlay.querySelector('.subtitle').textContent=sub;
+    overlay.querySelector('.menu').innerHTML='';
+    buttons.forEach(([label,fn])=>{const b=document.createElement('button');b.textContent=label;b.onclick=fn;overlay.querySelector('.menu').appendChild(b)});
+  }
+  function start() { initAudio(); reset(); state='playing'; overlay.style.display='none'; last=performance.now(); }
+  document.getElementById('start').onclick=()=>{initAudio();sfx.start();start()};
+  document.getElementById('audioToggle').onclick=toggleAudio;
+  document.getElementById('how').onclick=()=>showMenu('HOW TO PLAY','SURVIVE THE WAVES',[['BACK TO MENU',menu]]);
+  document.getElementById('about').onclick=()=>showMenu('ABOUT','CAT\'S SPACE INVADER · AC KONDO SOFTWARE',[['BACK TO MENU',menu]]);
+  function menu() {
+    state='menu';
+    showMenu('CAT\'S SPACE INVADER','FAMICOM-STYLE ARCADE SYSTEM',[
+      ['▶ START GAME',start],
+      ['HOW TO PLAY',()=>showMenu('HOW TO PLAY','ARROWS / A-D TO MOVE · SPACE TO FIRE · P TO PAUSE',[['BACK',menu]])],
+      ['ABOUT',()=>showMenu('ABOUT','CAT\'S SPACE INVADER · SINGLE-FILE HTML',[['BACK',menu]])]
+    ]);
+  }
+  function pause() {
+    if(state==='playing') { state='paused'; showMenu('PAUSED','TAKE A BREATHER',[['RESUME',()=>{state='playing';overlay.style.display='none';last=performance.now()}],['MAIN MENU',menu]]); }
+  }
+  addEventListener('keydown',e=>{
+    if(['ArrowLeft','ArrowRight',' ','ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault();
+    if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a') keys.left=true;
+    if(e.key==='ArrowRight'||e.key.toLowerCase()==='d') keys.right=true;
+    if(e.code==='Space') keys.fire=true;
+    if(e.key.toLowerCase()==='p' && (state==='playing'||state==='paused')) { if(state==='playing') pause(); else {state='playing';overlay.style.display='none';last=performance.now()} }
+    if(e.key==='Enter' && state==='gameover') start();
+  });
+  addEventListener('keyup',e=>{
+    if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a') keys.left=false;
+    if(e.key==='ArrowRight'||e.key.toLowerCase()==='d') keys.right=false;
+    if(e.code==='Space') keys.fire=false;
+  });
+  function hold(id,key) {
+    const el=document.getElementById(id);
+    el.addEventListener('pointerdown',e=>{e.preventDefault();keys[key]=true});
+    ['pointerup','pointercancel','pointerleave'].forEach(ev=>el.addEventListener(ev,()=>keys[key]=false));
+  }
+  hold('left','left');hold('right','right');hold('fire','fire');
+  function rect(x,y,w,h,color) {ctx.fillStyle=color;ctx.fillRect(Math.round(x),Math.round(y),w,h)}
+  function burst(x,y,color) { for(let i=0;i<8;i++) particles.push({x,y,vx:(Math.random()-.5)*150,vy:(Math.random()-.5)*150,t:.35,c:color}); }
+  function collide(a,b) {return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y}
+  function update(dt) {
+    elapsed+=dt;
+    player.cool=Math.max(0,player.cool-dt); player.hit=Math.max(0,player.hit-dt);
+    if(keys.left) player.x-=360*dt;
+    if(keys.right) player.x+=360*dt;
+    player.x=Math.max(18,Math.min(W-60,player.x));
+    if(keys.fire&&player.cool<=0) {bullets.push({x:player.x+19,y:player.y-12,w:4,h:14,vy:-520});player.cool=.28;sfx.shoot()}
+    bullets.forEach(b=>b.y+=b.vy*dt); enemyBullets.forEach(b=>b.y+=b.vy*dt);
+    bullets=bullets.filter(b=>b.y>-20); enemyBullets=enemyBullets.filter(b=>b.y<H+20);
+    const alive=invaders.filter(i=>i.alive), speed=25+((55-alive.length)*2.1)+wave*5;
+    let edge=false;
+    alive.forEach(i=>{i.x+=enemyDir*speed*dt;if(i.x<18||i.x+i.w>W-18) edge=true});
+    if(edge) {enemyDir*=-1;alive.forEach(i=>i.y+=17);enemyStep++}
+    for(const b of bullets) {
+      let hit=false;
+      for(const s of shields) if(s.alive&&collide(b,s)){s.alive=false;hit=true;break}
+      if(hit){b.y=-50;sfx.hit();continue}
+      for(const i of alive) if(collide(b,i)){i.alive=false;b.y=-50;score+=(5-i.row)*10;burst(i.x+15,i.y+10,colors[i.row%3]);sfx.enemy();break}
+    }
+    fireTimer-=dt;
+    if(fireTimer<=0&&alive.length) {
+      const shooter=alive[Math.floor(Math.random()*alive.length)];
+      enemyBullets.push({x:shooter.x+13,y:shooter.y+22,w:5,h:13,vy:230+wave*18});
+      fireTimer=Math.max(.28,1.1-alive.length*.012)*(.75+Math.random()*.6);
+    }
+    for(const b of enemyBullets) {
+      for(const s of shields) if(s.alive&&collide(b,s)){s.alive=false;b.y=H+50;break}
+      if(player.hit<=0&&collide(b,{x:player.x,y:player.y,w:player.w,h:player.h})){b.y=H+50;lives--;player.hit=1.2;burst(player.x+20,player.y,'#ff7080');if(lives<=0)endGame();else sfx.player();break}
+    }
+    if(alive.some(i=>i.y+i.h>=player.y)) endGame();
+    if(invaders.every(i=>!i.alive)){wave++;bullets=[];enemyBullets=[];newWave();sfx.wave()}
+    particles.forEach(p=>{p.x+=p.vx*dt;p.y+=p.vy*dt;p.t-=dt});particles=particles.filter(p=>p.t>0);
+    updateHud();
+  }
+  function endGame(){if(state==='gameover')return;state='gameover';sfx.player();showMenu('GAME OVER','FINAL SCORE '+String(score).padStart(5,'0'),[['PLAY AGAIN',start],['MAIN MENU',menu]])}
+  function draw() {
+    ctx.fillStyle='#02050b';ctx.fillRect(0,0,W,H);
+    // starfield
+    for(let i=0;i<90;i++){const x=(i*97)%W,y=(i*53+elapsed*18)%H;rect(x,y,2,2,'#31465e')}
+    // player ship
+    if(player && player.hit<=0 || player && Math.floor(elapsed*12)%2===0) {
+      const x=player.x,y=player.y;
+      rect(x+17,y,9,7,'#dfffff');rect(x+9,y+7,25,7,'#75f7ff');rect(x+3,y+14,37,8,'#39a9c4');rect(x+15,y+5,13,3,'#fff');
+    }
+    invaders.forEach(i=>{if(!i.alive)return;const c=colors[i.row%3],x=i.x,y=i.y;
+      rect(x+7,y,16,4,c);rect(x+2,y+4,26,7,c);rect(x,y+11,6,7,c);rect(x+24,y+11,6,7,c);
+      rect(x+5,y+18,6,4,c);rect(x+19,y+18,6,4,c);rect(x+7,y+8,4,4,'#06101a');rect(x+19,y+8,4,4,'#06101a');
+    });
+    shields.forEach(s=>{if(s.alive)rect(s.x,s.y,s.w,s.h,'#65d879')});
+    bullets.forEach(b=>rect(b.x,b.y,b.w,b.h,'#eaff9b'));
+    enemyBullets.forEach(b=>rect(b.x,b.y,b.w,b.h,'#ff7b83'));
+    particles.forEach(p=>rect(p.x,p.y,3,3,p.c));
+    rect(20,580,760,2,'#24445b');
+  }
+  function frame(now) {
+    const dt=Math.min((now-last)/1000||0,.033);last=now;
+    if(state==='playing')update(dt);
+    draw();requestAnimationFrame(frame);
+  }
+  player={x:W/2,y:545,w:42,h:24,cool:0,hit:0};newWave();
+  menu();syncAudioButton();requestAnimationFrame(t=>{last=t;frame(t)});
+})();
+</script>
+</body>
+</html>
